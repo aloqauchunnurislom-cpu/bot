@@ -13,6 +13,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 from google import genai
 from summary import get_summary
+import cache
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -253,6 +254,14 @@ async def translate_callback(callback: types.CallbackQuery):
     await callback.message.edit_text("⏳ Tarjima qilyapman, biroz kuting...")
 
     try:
+        # 1. Keshdan tekshirish
+        cached = cache.get(video_id, "translation")
+        if cached:
+            await callback.message.delete()
+            await callback.message.answer("⚡ <i>Keshdan olindi</i>", parse_mode="HTML")
+            await send_long_message(callback.message, cached)
+            return
+
         loop = asyncio.get_event_loop()
 
         full_text = await loop.run_in_executor(None, lambda: fetch_transcript_ytdlp(video_id))
@@ -284,6 +293,9 @@ async def translate_callback(callback: types.CallbackQuery):
 
         if not translated_text:
             raise ValueError("Tarjima bo'sh qaytdi")
+
+        # 2. Keshga saqlash
+        cache.set(video_id, "translation", translated_text)
 
         await callback.message.delete()
 
@@ -321,7 +333,17 @@ async def summary_callback(callback: types.CallbackQuery):
 
     await callback.message.edit_text("⏳ Mazmun tayyorlanmoqda...")
 
+    # Keshdan tekshirish
+    cached = cache.get(video_id, "summary")
+    if cached:
+        await callback.message.edit_text(f"📋 <b>Video mazmuni:</b>\n\n{cached} ⚡ <i>(kesh)</i>")
+        return
+
     summary = await get_summary(video_id, gemini_client)
+
+    # Muvaffaqiyatli bo'lsa keshga saqlash
+    if not summary.startswith("❌"):
+        cache.set(video_id, "summary", summary)
 
     await callback.message.edit_text(f"📋 <b>Video mazmuni:</b>\n\n{summary}")
 
