@@ -9,8 +9,19 @@ async def get_summary(video_id: str, gemini_client: genai.Client) -> str:
     YouTube video ID si berilganda, uning mazmunini o'zbek tilida qaytaradi.
     """
     loop = asyncio.get_event_loop()
-    ytta = YouTubeTranscriptApi()
-
+    import os, requests
+    from http.cookiejar import MozillaCookieJar
+    
+    http_client = requests.Session()
+    if os.path.exists("cookies.txt"):
+        try:
+            cj = MozillaCookieJar("cookies.txt")
+            cj.load(ignore_discard=True, ignore_expires=True)
+            http_client.cookies.update(cj)
+        except Exception:
+            pass            
+            
+    ytta = YouTubeTranscriptApi(http_client=http_client)
     try:
         # 1. Subtitrni olish
         transcript = await loop.run_in_executor(
