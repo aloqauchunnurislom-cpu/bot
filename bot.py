@@ -252,6 +252,21 @@ async def summary_callback(callback: types.CallbackQuery):
 
 # ================== ISHGA TUSHIRISH ==================
 
+from aiohttp import web
+
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def start_dummy_server():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    logger.info(f"Dummy web server {port}-portda ishga tushdi...")
+    await site.start()
+
 async def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -262,6 +277,7 @@ async def main():
         ]
     )
     logger.info("Bot ishga tushmoqda...")
+    await start_dummy_server()
     await dp.start_polling(bot)
 
 
