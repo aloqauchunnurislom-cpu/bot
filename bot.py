@@ -65,15 +65,16 @@ def fetch_transcript_ytdlp(video_id: str) -> str | None:
         "--skip-download",
         "--sub-format", "json3",
         "-o", f"/tmp/yt_sub_{video_id}",
+        "--proxy", "socks5://127.0.0.1:9050",
     ]
-    
+
     # Cookie fayl mavjud bo'lsa qo'shamiz
     cookie_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
     if os.path.exists(cookie_path):
         cmd += ["--cookies", cookie_path]
         logger.info("cookies.txt topildi va ishlatilmoqda")
     else:
-        logger.warning("cookies.txt topilmadi!")
+        logger.warning("cookies.txt topilmadi! Tor orqali urinib ko'riladi.")
 
     cmd.append(url)
 

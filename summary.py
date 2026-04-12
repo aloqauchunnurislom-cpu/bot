@@ -34,6 +34,7 @@ def _fetch_transcript_ytdlp(video_id: str) -> str | None:
         "--skip-download",
         "--sub-format", "json3",
         "-o", f"/tmp/yt_sum_{video_id}",
+        "--proxy", "socks5://127.0.0.1:9050",
     ]
 
     cookie_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
