@@ -3,14 +3,14 @@ import re
 import asyncio
 import logging
 import time
+import json
+import subprocess
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
-from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound, CouldNotRetrieveTranscript
 from google import genai
 from summary import get_summary
 
@@ -39,6 +39,89 @@ YOUTUBE_REGEX = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def fetch_transcript_ytdlp(video_id: str) -> str | None:
+    """yt-dlp yordamida YouTube subtitrini oladi (cookies.txt bilan)."""
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    
+    # yt-dlp path: Railway'da pip install bilan o'rnatiladi
+    ytdlp_paths = ["yt-dlp", "/Users/macbookpro/Library/Python/3.9/bin/yt-dlp"]
+    ytdlp_cmd = "yt-dlp"
+    for path in ytdlp_paths:
+        try:
+            result = subprocess.run([path, "--version"], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                ytdlp_cmd = path
+                break
+        except Exception:
+            continue
+
+    cmd = [
+        ytdlp_cmd,
+        "--write-auto-sub",
+        "--write-sub",
+        "--sub-lang", "en",
+        "--skip-download",
+        "--sub-format", "json3",
+        "-o", f"/tmp/yt_sub_{video_id}",
+    ]
+    
+    # Cookie fayl mavjud bo'lsa qo'shamiz
+    cookie_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+    if os.path.exists(cookie_path):
+        cmd += ["--cookies", cookie_path]
+        logger.info("cookies.txt topildi va ishlatilmoqda")
+    else:
+        logger.warning("cookies.txt topilmadi!")
+
+    cmd.append(url)
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        logger.info(f"yt-dlp stdout: {result.stdout[:300]}")
+        if result.returncode != 0:
+            logger.error(f"yt-dlp xato: {result.stderr[:300]}")
+    except subprocess.TimeoutExpired:
+        logger.error("yt-dlp timeout!")
+        return None
+    except Exception as e:
+        logger.error(f"yt-dlp ishlatishda xato: {e}")
+        return None
+
+    # JSON subtitr faylini o'qish
+    import glob
+    pattern = f"/tmp/yt_sub_{video_id}*.json3"
+    files = glob.glob(pattern)
+    if not files:
+        logger.error(f"Subtitr fayl topilmadi: {pattern}")
+        return None
+
+    try:
+        with open(files[0], "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        texts = []
+        for event in data.get("events", []):
+            for seg in event.get("segs", []):
+                t = seg.get("utf8", "").strip()
+                if t and t != "\n":
+                    texts.append(t)
+        
+        # Tozalash
+        for fpath in files:
+            try:
+                os.remove(fpath)
+            except Exception:
+                pass
+        
+        full_text = " ".join(texts)
+        logger.info(f"Subtitr olindi: {len(full_text)} belgi")
+        return full_text if len(full_text) > 10 else None
+
+    except Exception as e:
+        logger.error(f"Subtitr faylini o'qishda xato: {e}")
+        return None
 
 
 def extract_video_id(url: str) -> str | None:
@@ -170,32 +253,12 @@ async def translate_callback(callback: types.CallbackQuery):
 
     try:
         loop = asyncio.get_event_loop()
-        
-        # Cookie fayli orqali YouTube blokini aylanib o'tish
-        import requests
-        from http.cookiejar import MozillaCookieJar
-        
-        http_client = requests.Session()
-        if os.path.exists("cookies.txt"):
-            try:
-                cj = MozillaCookieJar("cookies.txt")
-                cj.load(ignore_discard=True, ignore_expires=True)
-                http_client.cookies.update(cj)
-                logger.info("Cookies yuklandi!")
-            except Exception as ce:
-                logger.error(f"Cookie yuklashda xato: {ce}")
-                
-        ytta = YouTubeTranscriptApi(http_client=http_client)
 
-        transcript = await loop.run_in_executor(
-            None,
-            lambda: ytta.fetch(video_id, languages=['en', 'en-US', 'en-GB'])
-        )
+        full_text = await loop.run_in_executor(None, lambda: fetch_transcript_ytdlp(video_id))
 
-        full_text = " ".join([entry.text for entry in transcript])
-
-        if len(full_text) < 10:
-            raise ValueError("Matn juda qisqa")
+        if not full_text or len(full_text) < 10:
+            await callback.message.edit_text("❌ Bu videoda inglizcha subtitr topilmadi.")
+            return
 
         truncated = False
         if len(full_text) > MAX_TRANSCRIPT_CHARS:
@@ -230,12 +293,9 @@ async def translate_callback(callback: types.CallbackQuery):
 
         await send_long_message(callback.message, translated_text)
 
-    except (TranscriptsDisabled, NoTranscriptFound, CouldNotRetrieveTranscript):
-        await callback.message.edit_text("❌ Bu videoda inglizcha subtitr topilmadi.")
-
     except Exception as e:
         logger.error(f"Tarjima xato [{video_id}]: {e}", exc_info=True)
-        await callback.message.edit_text(f"❌ Xatolik: {type(e).__name__}")
+        await callback.message.edit_text(f"❌ Xatolik yuz berdi. Keyinroq urinib ko'ring.")
 
 
 @dp.callback_query(F.data.startswith("summary:"))
