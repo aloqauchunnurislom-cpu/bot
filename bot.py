@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 import json
-import subprocess
+import httpx
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
@@ -18,9 +18,14 @@ import cache
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+SUPADATA_API_KEY = os.getenv("SUPADATA_API_KEY")
 
 if not BOT_TOKEN or not GEMINI_API_KEY:
     raise ValueError("❌ BOT_TOKEN yoki GEMINI_API_KEY topilmadi!")
+
+if not SUPADATA_API_KEY:
+    logger_init = logging.getLogger(__name__)
+    logger_init.warning("⚠️ SUPADATA_API_KEY topilmadi! Subtitr olish ishlamasligi mumkin.")
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -41,88 +46,45 @@ YOUTUBE_REGEX = (
 
 logger = logging.getLogger(__name__)
 
+SUPADATA_BASE_URL = "https://api.supadata.ai/v1"
 
-def fetch_transcript_ytdlp(video_id: str) -> str | None:
-    """yt-dlp yordamida YouTube subtitrini oladi (cookies.txt bilan)."""
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    
-    # yt-dlp path: Railway'da pip install bilan o'rnatiladi
-    ytdlp_paths = ["yt-dlp", "/Users/macbookpro/Library/Python/3.9/bin/yt-dlp"]
-    ytdlp_cmd = "yt-dlp"
-    for path in ytdlp_paths:
-        try:
-            result = subprocess.run([path, "--version"], capture_output=True, timeout=5)
-            if result.returncode == 0:
-                ytdlp_cmd = path
-                break
-        except Exception:
-            continue
 
-    cmd = [
-        ytdlp_cmd,
-        "--write-auto-sub",
-        "--write-sub",
-        "--sub-lang", "en",
-        "--skip-download",
-        "--sub-format", "json3",
-        "-o", f"/tmp/yt_sub_{video_id}",
-        "--proxy", "socks5://127.0.0.1:9050",
-    ]
+def fetch_transcript_supadata(video_id: str) -> str | None:
+    """Supadata API orqali YouTube subtitrini oladi."""
+    if not SUPADATA_API_KEY:
+        logger.error("SUPADATA_API_KEY mavjud emas!")
+        return None
 
-    # Cookie fayl mavjud bo'lsa qo'shamiz
-    cookie_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
-    if os.path.exists(cookie_path):
-        cmd += ["--cookies", cookie_path]
-        logger.info("cookies.txt topildi va ishlatilmoqda")
-    else:
-        logger.warning("cookies.txt topilmadi! Tor orqali urinib ko'riladi.")
-
-    cmd.append(url)
+    url = f"{SUPADATA_BASE_URL}/transcript"
+    params = {
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "lang": "en",
+        "text": "true",
+    }
+    headers = {
+        "x-api-key": SUPADATA_API_KEY,
+    }
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        logger.info(f"yt-dlp stdout: {result.stdout[:300]}")
-        if result.returncode != 0:
-            logger.error(f"yt-dlp xato: {result.stderr[:300]}")
-    except subprocess.TimeoutExpired:
-        logger.error("yt-dlp timeout!")
-        return None
-    except Exception as e:
-        logger.error(f"yt-dlp ishlatishda xato: {e}")
-        return None
+        response = httpx.get(url, params=params, headers=headers, timeout=30)
+        logger.info(f"Supadata status: {response.status_code}")
 
-    # JSON subtitr faylini o'qish
-    import glob
-    pattern = f"/tmp/yt_sub_{video_id}*.json3"
-    files = glob.glob(pattern)
-    if not files:
-        logger.error(f"Subtitr fayl topilmadi: {pattern}")
-        return None
+        if response.status_code != 200:
+            logger.error(f"Supadata xato: {response.status_code} - {response.text[:300]}")
+            return None
 
-    try:
-        with open(files[0], "r", encoding="utf-8") as f:
-            data = json.load(f)
-        
-        texts = []
-        for event in data.get("events", []):
-            for seg in event.get("segs", []):
-                t = seg.get("utf8", "").strip()
-                if t and t != "\n":
-                    texts.append(t)
-        
-        # Tozalash
-        for fpath in files:
-            try:
-                os.remove(fpath)
-            except Exception:
-                pass
-        
-        full_text = " ".join(texts)
-        logger.info(f"Subtitr olindi: {len(full_text)} belgi")
-        return full_text if len(full_text) > 10 else None
+        data = response.json()
+        content = data.get("content", "")
+
+        if not content or len(content) < 10:
+            logger.warning(f"Supadata: Subtitr juda qisqa yoki yo'q [{video_id}]")
+            return None
+
+        logger.info(f"Supadata: Subtitr olindi [{video_id}]: {len(content)} belgi")
+        return content
 
     except Exception as e:
-        logger.error(f"Subtitr faylini o'qishda xato: {e}")
+        logger.error(f"Supadata xato: {e}")
         return None
 
 
@@ -264,7 +226,7 @@ async def translate_callback(callback: types.CallbackQuery):
 
         loop = asyncio.get_event_loop()
 
-        full_text = await loop.run_in_executor(None, lambda: fetch_transcript_ytdlp(video_id))
+        full_text = await loop.run_in_executor(None, lambda: fetch_transcript_supadata(video_id))
 
         if not full_text or len(full_text) < 10:
             await callback.message.edit_text("❌ Bu videoda inglizcha subtitr topilmadi.")
