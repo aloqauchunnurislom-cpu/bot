@@ -170,7 +170,22 @@ async def translate_callback(callback: types.CallbackQuery):
 
     try:
         loop = asyncio.get_event_loop()
-        ytta = YouTubeTranscriptApi()
+        
+        # Cookie fayli orqali YouTube blokini aylanib o'tish
+        import requests
+        from http.cookiejar import MozillaCookieJar
+        
+        http_client = requests.Session()
+        if os.path.exists("cookies.txt"):
+            try:
+                cj = MozillaCookieJar("cookies.txt")
+                cj.load(ignore_discard=True, ignore_expires=True)
+                http_client.cookies.update(cj)
+                logger.info("Cookies yuklandi!")
+            except Exception as ce:
+                logger.error(f"Cookie yuklashda xato: {ce}")
+                
+        ytta = YouTubeTranscriptApi(http_client=http_client)
 
         transcript = await loop.run_in_executor(
             None,
