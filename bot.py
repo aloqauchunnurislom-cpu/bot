@@ -327,6 +327,25 @@ async def start_dummy_server():
     logger.info(f"Dummy web server {port}-portda ishga tushdi...")
     await site.start()
 
+# ─── Self-ping (Render uxlamasligi uchun) ────────────────────────────
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
+
+async def self_ping_forever():
+    """Har 10 daqiqada o'z-o'ziga ping — Render uxlamaydi."""
+    if not RENDER_URL:
+        logger.info("ℹ️ RENDER_EXTERNAL_URL topilmadi — self-ping o'chirilgan")
+        return
+
+    logger.info("🏓 Self-ping ishga tushdi: har 10 daqiqada → %s", RENDER_URL)
+    while True:
+        try:
+            await asyncio.sleep(600)  # 10 daqiqa
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(RENDER_URL, timeout=10)
+                logger.info("🏓 Self-ping: %s (status=%d)", RENDER_URL, resp.status_code)
+        except Exception as e:
+            logger.warning("🏓 Self-ping xatolik: %s", e)
+
 async def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -338,6 +357,7 @@ async def main():
     )
     logger.info("Bot ishga tushmoqda...")
     await start_dummy_server()
+    asyncio.create_task(self_ping_forever())  # Self-ping ni fonda ishga tushirish
     await dp.start_polling(bot)
 
 
